@@ -9,7 +9,7 @@ export const createUserSchema = t.Object({
   email: t.String({
     format: 'email',
     examples: ['john.doe@acme.inc']
-  }),
+  })
 });
 
 export type CreateUserSchema = typeof createUserSchema.static;
@@ -21,7 +21,7 @@ export const createUserConflictErrorSchema = t.Object({
 
 export const createUserSuccessSchema = t.Object({
   id: t.String({ format: 'uuid' }),
-  
+
   name: t.String(),
   email: t.String({ format: 'email' }),
 

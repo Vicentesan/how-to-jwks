@@ -11,7 +11,7 @@ export const createUserController = new Elysia().post(
   async ({ body, status }) => {
     const user = await createUserUseCase({
       email: body.email.toLowerCase(),
-      name: body.name,
+      name: body.name
     });
 
     return status(201, {
@@ -19,7 +19,7 @@ export const createUserController = new Elysia().post(
       name: user.name,
       email: user.email,
       createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
+      updatedAt: user.updatedAt
     });
   },
   {

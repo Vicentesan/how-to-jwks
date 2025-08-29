@@ -11,7 +11,10 @@ function loadAppEnvs() {
     APP_ENV: z.enum(['dev', 'prod']).default('dev'),
     PORT: z.coerce.number().default(3333),
     ISSUER: z.string().default('how-to-jwks'),
-    JWKS_MAX_KEYS: z.coerce.number().default(5)
+    JWKS_MAX_KEYS: z.coerce.number().default(5),
+    ACCESS_TOKEN_EXPIRY_MS: z.coerce.number(),
+    REFRESH_TOKEN_EXPIRY_MS: z.coerce.number(),
+    JWT_SECRET: z.string()
   });
 
   return schema.parse(process.env);

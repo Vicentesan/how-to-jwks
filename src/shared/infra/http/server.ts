@@ -1,4 +1,5 @@
 import { Elysia } from 'elysia';
+import { authRoutes } from '@/modules/auth/routes';
 import { userRoutes } from '@/modules/users/routes';
 import { envs } from '@/shared/config/envs';
 import { BadRequestError } from '@/shared/errors/bad-request-error';
@@ -60,6 +61,7 @@ export const app = new Elysia()
       }
     }
   })
-  .use(userRoutes);
+  .use(userRoutes)
+  .use(authRoutes);
 
 app.listen(envs.app.PORT, () => console.log('HTTP server running'));
