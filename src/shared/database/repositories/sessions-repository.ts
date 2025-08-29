@@ -24,10 +24,7 @@ class DrizzleSessionsRepository {
     session: Pick<Session, 'userId' | 'token' | 'refreshToken' | 'expiresAt'>,
     tx?: Transaction
   ) {
-    const [createdSession] = await (tx ?? db)
-      .insert(sessions)
-      .values(session)
-      .returning();
+    const [createdSession] = await (tx ?? db).insert(sessions).values(session).returning();
 
     return createdSession;
   }
