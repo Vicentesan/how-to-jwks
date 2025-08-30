@@ -1,42 +1,42 @@
 # How to JWKS
 
-This repository demonstrates my first attempt at implementing JSON Web Key Set (JWKS) authentication. After learning the basics from [Diego Fernandes (@dieegosf)](https://x.com/dieegosf) and diving deep into key rotation, token validation, and session management, I've created this implementation that keeps things simple and reliable. A huge shoutout to Diego for teaching me the fundamentals of JWKS and inspiring me to create this blog post available at [vicentesan.dev/blog/how-to-jwks](https://vicentesan.dev/blog/how-to-jwks).
+This repo is my first shot at building a simple way to do JWKS (JSON Web Key Set) authentication. I learned the basics from [Diego Fernandes (@dieegosf)](https://x.com/dieegosf) and then dove into key rotation, token validation, and session management. I kept it straightforward and reliable. Big shoutout to Diego for teaching me the fundamentals of JWKS and inspiring me to write this blog post at [vicentesan.dev/blog/how-to-jwks](https://vicentesan.dev/blog/how-to-jwks).
 
-This is a living document for the community. Feel free to open issues to discuss improvements, edge cases, or share your experiences. Pull requests are welcome to enhance the implementation, fix bugs, or add new features. Let's learn and improve together!
+This is a living document for everyone. Feel free to open issues if you want to discuss improvements, edge cases, or share your own experiences. Pull requests are totally welcome — let's learn and improve together!
 
 ## The Problem
 
-JWKS authentication sounds straightforward until you actually implement it. You quickly run into:
+Getting JWKS working sounds simple until you actually try to do it. Then you run into stuff like:
 
-- **Key rotation nightmares**: When do you rotate? How long do you keep old keys?
-- **Race conditions**: Tokens signed with old keys while new keys are being deployed
-- **State management**: Keeping track of which keys are active, revoked, or expired
-- **Distributed complexity**: Ensuring all your services can validate tokens consistently
+-  **Key rotation nightmares**: When do you rotate? How long do you keep old keys?
+-  **Race conditions**: Tokens signed with old keys while new keys are being deployed
+-  **State management**: Keeping track of which keys are active, revoked, or expired
+-  **Distributed complexity**: Making sure all your services can verify tokens consistently
 
-Most solutions I've seen either over-engineer the problem or ignore critical edge cases. This implementation focuses on simplicity and reliability.
+Most solutions I’ve seen either overcomplicate things or ignore these edge cases. This implementation focuses on keeping it simple and reliable.
 
 ## The Solution
 
-The core idea is simple: **centralize all key management in Redis with clear lifecycle rules**.
+The core idea is: **manage all your keys in Redis with clear rules**.
 
 ### Key Principles
 
-1. **Always have an active key**: The system ensures there's always a valid key for signing tokens
-2. **Keep recent keys for validation**: Store the last N keys to handle tokens signed before rotation
-3. **Use Redis for persistence**: Keys survive restarts but stay in memory for performance
-4. **Single source of truth**: One function to get keys, one function to rotate them
+1. **Always have an active key**: The system makes sure there’s always a valid key for signing tokens.
+2. **Keep recent keys for validation**: Store the last N keys to handle tokens signed before rotation.
+3. **Use Redis for persistence**: Keys survive restarts and stay fast.
+4. **Single source of truth**: One function to get keys, one to rotate them.
 
 ## Implementation Details
 
 ### Key Management
 
-Keys are stored in Redis with the following structure:
+Keys are stored in Redis with this structure:
 
-- `auth:keys:active` - The currently active key ID
-- `auth:keys:pem:{kid}` - Private key PEM for signing
-- `auth:keys:jwk:{kid}` - Public key JWK for validation
-- `auth:keys:recent` - Sorted set of recent key IDs (by timestamp)
-- `auth:keys:revoked` - Set of revoked key IDs
+-  `auth:keys:active` — The current key ID for signing
+-  `auth:keys:pem:{kid}` — Private key PEM for signing
+-  `auth:keys:jwk:{kid}` — Public key in JWK format for validation
+-  `auth:keys:recent` — Sorted set of recent key IDs (by timestamp)
+-  `auth:keys:revoked` — Set of revoked key IDs
 
 ### Core Functions
 
@@ -129,7 +129,7 @@ export async function getJWKS() {
 ```
 
 #### `getActivePrivateKeyAndKid()`
-Gets the currently active private key for signing tokens:
+Gets the current private key for signing tokens:
 
 ```typescript
 export async function getActivePrivateKeyAndKid() {
@@ -162,10 +162,10 @@ export async function getLocalJwkSet() {
 
 ### Authentication Flow
 
-1. **Startup**: App calls `ensureActiveKey()` to guarantee an active key
-2. **Login**: User authenticates with OTP, receives JWT signed with active key
-3. **Validation**: Services validate JWT using local JWK set from Redis
-4. **Rotation**: Admin triggers key rotation, old keys remain valid for existing tokens
+1. **Startup**: Call `ensureActiveKey()` to make sure a key exists.
+2. **Login**: Sign tokens with the active private key.
+3. **Validation**: Verify tokens with the JWKS fetched from Redis.
+4. **Rotation**: Run `rotateKeys()` periodically or after a security event to generate new keys, keep old ones for validation, and remove expired keys.
 
 ### Token Creation
 
@@ -234,7 +234,7 @@ REDIS_URL=redis://localhost:6379
 
 ## Key Rotation
 
-To rotate keys (recommended periodically or after security incidents):
+To rotate keys (recommended regularly or after a breach):
 
 ```typescript
 export async function rotateKeys() {
@@ -271,78 +271,26 @@ export async function rotateKeys() {
 }
 ```
 
-This will:
-1. Generate a new key pair
-2. Mark the new key as active
-3. Keep the old key for token validation
-4. Clean up keys beyond the retention limit
+This creates a new key pair, sets it as active, and cleans up old keys.
 
 ## Best Practices
 
-### Security
-- Use RS256 (RSA) instead of HS256 (HMAC) for distributed systems
-- Rotate keys regularly (monthly recommended)
-- Keep private keys secure and never expose them
-- Use HTTPS in production
+-  Use RS256 (RSA) instead of HS256 (HMAC) for distributed systems
+-  Rotate keys often (monthly recommended)
+-  Keep private keys secure
+-  Use HTTPS in production
+-  Cache JWKS responses in your services
+-  Log rotation events and token validation failures
 
-### Performance
-- Cache JWKS responses in your services
-- Use Redis for key storage (fast, persistent)
-- Keep a reasonable number of recent keys (5-10)
+## Routes You’ll Need
 
-### Monitoring
-- Log key rotation events
-- Monitor token validation failures
-- Track key usage patterns
+### Public
 
-## Required Routes
+-  `GET /.well-known/jwks.json` — Serves your JWKS for other services to verify tokens
 
-Here are the essential routes you'll need for JWKS functionality:
+### Protected
 
-### Public Endpoints
+-  Middleware to verify JWTs using your JWKS
+-  Admin routes to rotate or revoke keys
 
-- **`GET /.well-known/jwks.json`** - Serves your JWKS (JSON Web Key Set) publicly
-  - Returns the current set of valid public keys
-  - Used by other services to validate your JWT tokens
-  - Should be publicly accessible without authentication
-
-### Authentication Middleware
-
-- **Auth Middleware** - Validates JWT tokens in protected routes
-  - Extracts Bearer token from Authorization header
-  - Validates token using your JWKS
-  - Adds user information to request object
-  - Returns 401 for invalid/missing tokens
-
-### Admin Endpoints (Protected)
-
-- **`POST /rotate-keys`** - Rotates the active signing key
-  - Generates new key pair
-  - Makes new key active for signing
-  - Keeps old keys for token validation
-  - Cleans up expired keys
-
-- **`POST /revoke-key`** - Revokes a specific key
-  - Adds key ID to revoked set
-  - Key will no longer be included in JWKS
-  - Existing tokens signed with this key become invalid
-
-## What This Doesn't Cover
-
-This implementation focuses on the core JWKS authentication flow. You'll still need to handle:
-
-- User registration and profile management
-- Email delivery for OTP codes
-- Rate limiting and abuse prevention
-- Password reset flows
-- Multi-factor authentication
-- Audit logging
-- Metrics and monitoring
-
-## Contributing
-
-Feel free to open issues or submit pull requests for improvements. This is meant to be a practical reference implementation that others can build upon.
-
-## License
-
-MIT License - see LICENSE file for details.
+Feel free to open issues or send pull requests to improve this. This is just a basic starting point — let’s build on it!
