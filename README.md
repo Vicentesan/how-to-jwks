@@ -46,51 +46,56 @@ Guarantees an active key exists, creating one if needed:
 ```typescript
 export async function ensureActiveKey() {
   const redis = getRedis();
-
-  let kid = await redis.get(ACTIVE_KID_KEY);
   
-  if (!kid) {
+  // Check if we have an active key
+  let activeKeyId = await redis.get(ACTIVE_KID_KEY);
+  
+  if (!activeKeyId) {
     const { privateKey, publicKey } = await jose.generateKeyPair('RS256', { extractable: true });
-
-    const newKid = crypto.randomUUID();
-    const pem = await jose.exportPKCS8(privateKey);
-    const jwk = await jose.exportJWK(publicKey);
-
-    jwk.kid = newKid;
-    jwk.alg = 'RS256';
-    jwk.use = 'sig';
-
-    await redis.set(KEY_PEM_PREFIX + newKid, pem);
-    await redis.set(KEY_JWK_PREFIX + newKid, JSON.stringify(jwk));
-    await redis.set(ACTIVE_KID_KEY, newKid);
-    await redis.zadd(RECENT_KEYS_ZSET, Date.now(), newKid);
-
-    const keep = await getKeepCount();
-    const total = await redis.zcard(RECENT_KEYS_ZSET);
-
-    if (total > keep) {
-      const toRemove = await redis.zrange(RECENT_KEYS_ZSET, 0, total - keep - 1);
-
-      for (const rk of toRemove) {
-        await redis.del(KEY_PEM_PREFIX + rk);
-        await redis.del(KEY_JWK_PREFIX + rk);
+    
+    const keyId = crypto.randomUUID();
+    
+    // Prepare the public key for storage
+    const publicJwk = await jose.exportJWK(publicKey);
+    publicJwk.kid = keyId;
+    publicJwk.alg = 'RS256';
+    publicJwk.use = 'sig';
+    
+    // Store everything in Redis
+    await redis.set(KEY_PEM_PREFIX + keyId, await jose.exportPKCS8(privateKey));
+    await redis.set(KEY_JWK_PREFIX + keyId, JSON.stringify(publicJwk));
+    await redis.set(ACTIVE_KID_KEY, keyId);
+    await redis.zadd(RECENT_KEYS_ZSET, Date.now(), keyId);
+    
+    // Clean up old keys if we have too many
+    const maxKeys = await getKeepCount();
+    const currentKeyCount = await redis.zcard(RECENT_KEYS_ZSET);
+    
+    if (currentKeyCount > maxKeys) {
+      const oldKeys = await redis.zrange(RECENT_KEYS_ZSET, 0, currentKeyCount - maxKeys - 1);
+      
+      for (const oldKeyId of oldKeys) {
+        await redis.del(KEY_PEM_PREFIX + oldKeyId);
+        await redis.del(KEY_JWK_PREFIX + oldKeyId);
       }
-
-      await redis.zrem(RECENT_KEYS_ZSET, ...toRemove);
+      
+      await redis.zrem(RECENT_KEYS_ZSET, ...oldKeys);
     }
-
-    kid = newKid;
+    
+    activeKeyId = keyId;
   }
-
-  const pem = await redis.get(KEY_PEM_PREFIX + kid);
-  const privateKey = pem ? await jose.importPKCS8(pem, 'RS256') : null;
-  const jwkStr = await redis.get(KEY_JWK_PREFIX + kid);
-  const publicJwk = jwkStr ? (JSON.parse(jwkStr) as jose.JWK) : null;
-
+  
+  // Load the key data
+  const privateKeyPem = await redis.get(KEY_PEM_PREFIX + activeKeyId);
+  const publicKeyJson = await redis.get(KEY_JWK_PREFIX + activeKeyId);
+  
+  const privateKey = await jose.importPKCS8(privateKeyPem!, 'RS256');
+  const publicJwk = JSON.parse(publicKeyJson!);
+  
   return {
-    kid,
-    privateKey: privateKey!,
-    publicJwk: publicJwk!,
+    kid: activeKeyId,
+    privateKey,
+    publicJwk,
     createdAt: new Date(),
     active: true
   };
@@ -103,26 +108,23 @@ Returns the current set of valid public keys:
 ```typescript
 export async function getJWKS() {
   const redis = getRedis();
-
-  const keep = await getKeepCount();
-  const kids = await redis.zrevrange(RECENT_KEYS_ZSET, 0, keep - 1);
-
-  const revoked = new Set(await redis.smembers(REVOKED_KEYS_SET));
-  const keys = [] as jose.JWK[];
-
-  for (const kid of kids) {
-    if (revoked.has(kid)) continue;
-
-    const jwkStr = await redis.get(KEY_JWK_PREFIX + kid);
-
-    if (!jwkStr) continue;
-
-    const jwk = JSON.parse(jwkStr) as jose.JWK;
-
-    keys.push(jwk);
+  
+  const maxKeys = await getKeepCount();
+  const recentKeyIds = await redis.zrevrange(RECENT_KEYS_ZSET, 0, maxKeys - 1);
+  const revokedKeys = new Set(await redis.smembers(REVOKED_KEYS_SET));
+  
+  const validKeys = [];
+  
+  for (const keyId of recentKeyIds) {
+    if (revokedKeys.has(keyId)) continue;
+    
+    const keyData = await redis.get(KEY_JWK_PREFIX + keyId);
+    if (!keyData) continue;
+    
+    validKeys.push(JSON.parse(keyData));
   }
-
-  return { keys };
+  
+  return { keys: validKeys };
 }
 ```
 
@@ -132,18 +134,18 @@ Gets the currently active private key for signing tokens:
 ```typescript
 export async function getActivePrivateKeyAndKid() {
   const redis = getRedis();
-
-  const kid = await redis.get(ACTIVE_KID_KEY);
-
-  if (!kid) {
+  
+  const activeKeyId = await redis.get(ACTIVE_KID_KEY);
+  
+  if (!activeKeyId) {
     const active = await ensureActiveKey();
     return { key: active.privateKey, kid: active.kid };
   }
-
-  const pem = await redis.get(KEY_PEM_PREFIX + kid);
-  const key = await jose.importPKCS8(pem!, 'RS256');
-
-  return { key, kid };
+  
+  const privateKeyPem = await redis.get(KEY_PEM_PREFIX + activeKeyId);
+  const privateKey = await jose.importPKCS8(privateKeyPem!, 'RS256');
+  
+  return { key: privateKey, kid: activeKeyId };
 }
 ```
 
@@ -153,7 +155,7 @@ Creates a local JWK set for token validation:
 ```typescript
 export async function getLocalJwkSet() {
   const jwks = await getJWKS();
-
+  
   return jose.createLocalJWKSet(jwks);
 }
 ```
@@ -170,7 +172,6 @@ export async function getLocalJwkSet() {
 ```typescript
 export async function createAccessToken(options: CreateAccessTokenOptions) {
   const { userId, sessionId } = options;
-
   const { key, kid } = await getActivePrivateKeyAndKid();
 
   const accessToken = await new jose.SignJWT({
@@ -238,37 +239,35 @@ To rotate keys (recommended periodically or after security incidents):
 ```typescript
 export async function rotateKeys() {
   const redis = getRedis();
-
+  
   const { privateKey, publicKey } = await jose.generateKeyPair('RS256', { extractable: true });
-
-  const kid = crypto.randomUUID();
-  const pem = await jose.exportPKCS8(privateKey);
-  const jwk = await jose.exportJWK(publicKey);
-
-  jwk.kid = kid;
-  jwk.alg = 'RS256';
-  jwk.use = 'sig';
-
-  await redis.set(KEY_PEM_PREFIX + kid, pem);
-  await redis.set(KEY_JWK_PREFIX + kid, JSON.stringify(jwk));
-  await redis.set(ACTIVE_KID_KEY, kid);
-  await redis.zadd(RECENT_KEYS_ZSET, Date.now(), kid);
-
-  const keep = await getKeepCount();
-  const total = await redis.zcard(RECENT_KEYS_ZSET);
-
-  if (total > keep) {
-    const toRemove = await redis.zrange(RECENT_KEYS_ZSET, 0, total - keep - 1);
-
-    for (const rk of toRemove) {
-      await redis.del(KEY_PEM_PREFIX + rk);
-      await redis.del(KEY_JWK_PREFIX + rk);
+  const keyId = crypto.randomUUID();
+  
+  const publicJwk = await jose.exportJWK(publicKey);
+  publicJwk.kid = keyId;
+  publicJwk.alg = 'RS256';
+  publicJwk.use = 'sig';
+  
+  await redis.set(KEY_PEM_PREFIX + keyId, await jose.exportPKCS8(privateKey));
+  await redis.set(KEY_JWK_PREFIX + keyId, JSON.stringify(publicJwk));
+  await redis.set(ACTIVE_KID_KEY, keyId);
+  await redis.zadd(RECENT_KEYS_ZSET, Date.now(), keyId);
+  
+  const maxKeys = await getKeepCount();
+  const currentKeyCount = await redis.zcard(RECENT_KEYS_ZSET);
+  
+  if (currentKeyCount > maxKeys) {
+    const oldKeys = await redis.zrange(RECENT_KEYS_ZSET, 0, currentKeyCount - maxKeys - 1);
+    
+    for (const oldKeyId of oldKeys) {
+      await redis.del(KEY_PEM_PREFIX + oldKeyId);
+      await redis.del(KEY_JWK_PREFIX + oldKeyId);
     }
-
-    await redis.zrem(RECENT_KEYS_ZSET, ...toRemove);
+    
+    await redis.zrem(RECENT_KEYS_ZSET, ...oldKeys);
   }
   
-  return { kid, privateKey };
+  return { kid: keyId, privateKey };
 }
 ```
 
