@@ -295,6 +295,38 @@ This will:
 - Monitor token validation failures
 - Track key usage patterns
 
+## Required Routes
+
+Here are the essential routes you'll need for JWKS functionality:
+
+### Public Endpoints
+
+- **`GET /.well-known/jwks.json`** - Serves your JWKS (JSON Web Key Set) publicly
+  - Returns the current set of valid public keys
+  - Used by other services to validate your JWT tokens
+  - Should be publicly accessible without authentication
+
+### Authentication Middleware
+
+- **Auth Middleware** - Validates JWT tokens in protected routes
+  - Extracts Bearer token from Authorization header
+  - Validates token using your JWKS
+  - Adds user information to request object
+  - Returns 401 for invalid/missing tokens
+
+### Admin Endpoints (Protected)
+
+- **`POST /rotate-keys`** - Rotates the active signing key
+  - Generates new key pair
+  - Makes new key active for signing
+  - Keeps old keys for token validation
+  - Cleans up expired keys
+
+- **`POST /revoke-key`** - Revokes a specific key
+  - Adds key ID to revoked set
+  - Key will no longer be included in JWKS
+  - Existing tokens signed with this key become invalid
+
 ## What This Doesn't Cover
 
 This implementation focuses on the core JWKS authentication flow. You'll still need to handle:
