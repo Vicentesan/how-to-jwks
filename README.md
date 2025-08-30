@@ -4,6 +4,8 @@ This repo is my first shot at building a simple way to do JWKS (JSON Web Key Set
 
 This is a living document for everyone. Feel free to open issues if you want to discuss improvements, edge cases, or share your own experiences. Pull requests are totally welcome — let's learn and improve together!
 
+> **New to JWKS or JWTs?** If you landed here and aren't sure what any of this means, check out the full article at [vicentesan.dev/blog/how-to-jwks](https://vicentesan.dev/blog/how-to-jwks) for a complete walkthrough of JSON Web Tokens and JSON Web Key Sets.
+
 ## The Problem
 
 Getting JWKS working sounds simple until you actually try to do it. Then you run into stuff like:
