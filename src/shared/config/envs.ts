@@ -13,8 +13,7 @@ function loadAppEnvs() {
     ISSUER: z.string().default('how-to-jwks'),
     JWKS_MAX_KEYS: z.coerce.number().default(5),
     ACCESS_TOKEN_EXPIRY_MS: z.coerce.number(),
-    REFRESH_TOKEN_EXPIRY_MS: z.coerce.number(),
-    JWT_SECRET: z.string()
+    REFRESH_TOKEN_EXPIRY_MS: z.coerce.number()
   });
 
   return schema.parse(process.env);

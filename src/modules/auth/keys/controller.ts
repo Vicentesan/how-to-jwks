@@ -6,6 +6,7 @@ export const keysAdminController = new Elysia({ prefix: '/keys' })
     '/rotate',
     async () => {
       const { kid } = await rotateKeys();
+      
       return { kid };
     },
     { tags: ['auth'], security: [] }
