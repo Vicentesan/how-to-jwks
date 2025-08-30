@@ -44,23 +44,54 @@ Guarantees an active key exists, creating one if needed:
 ```typescript
 export async function ensureActiveKey() {
   const redis = getRedis();
+
   let kid = await redis.get(ACTIVE_KID_KEY);
   
   if (!kid) {
-    // Generate new key pair
-    const { privateKey, publicKey } = await jose.generateKeyPair('RS256');
+    const { privateKey, publicKey } = await jose.generateKeyPair('RS256', { extractable: true });
+
     const newKid = crypto.randomUUID();
-    
-    // Store in Redis
-    await redis.set(KEY_PEM_PREFIX + newKid, await jose.exportPKCS8(privateKey));
-    await redis.set(KEY_JWK_PREFIX + newKid, JSON.stringify(await jose.exportJWK(publicKey)));
+    const pem = await jose.exportPKCS8(privateKey);
+    const jwk = await jose.exportJWK(publicKey);
+
+    jwk.kid = newKid;
+    jwk.alg = 'RS256';
+    jwk.use = 'sig';
+
+    await redis.set(KEY_PEM_PREFIX + newKid, pem);
+    await redis.set(KEY_JWK_PREFIX + newKid, JSON.stringify(jwk));
     await redis.set(ACTIVE_KID_KEY, newKid);
     await redis.zadd(RECENT_KEYS_ZSET, Date.now(), newKid);
-    
+
+    const keep = await getKeepCount();
+    const total = await redis.zcard(RECENT_KEYS_ZSET);
+
+    if (total > keep) {
+      const toRemove = await redis.zrange(RECENT_KEYS_ZSET, 0, total - keep - 1);
+
+      for (const rk of toRemove) {
+        await redis.del(KEY_PEM_PREFIX + rk);
+        await redis.del(KEY_JWK_PREFIX + rk);
+      }
+
+      await redis.zrem(RECENT_KEYS_ZSET, ...toRemove);
+    }
+
     kid = newKid;
   }
-  
-  return { kid, privateKey, publicJwk };
+
+  const pem = await redis.get(KEY_PEM_PREFIX + kid);
+  const privateKey = pem ? await jose.importPKCS8(pem, 'RS256') : null;
+  const jwkStr = await redis.get(KEY_JWK_PREFIX + kid);
+  const publicJwk = jwkStr ? (JSON.parse(jwkStr) as jose.JWK) : null;
+
+  return {
+    kid,
+    privateKey: privateKey!,
+    publicJwk: publicJwk!,
+    createdAt: new Date(),
+    active: true
+  };
 }
 ```
 
@@ -70,20 +101,58 @@ Returns the current set of valid public keys:
 ```typescript
 export async function getJWKS() {
   const redis = getRedis();
+
   const keep = await getKeepCount();
   const kids = await redis.zrevrange(RECENT_KEYS_ZSET, 0, keep - 1);
+
   const revoked = new Set(await redis.smembers(REVOKED_KEYS_SET));
-  
-  const keys = [];
+  const keys = [] as jose.JWK[];
+
   for (const kid of kids) {
     if (revoked.has(kid)) continue;
 
     const jwkStr = await redis.get(KEY_JWK_PREFIX + kid);
 
-    if (jwkStr) keys.push(JSON.parse(jwkStr));
+    if (!jwkStr) continue;
+
+    const jwk = JSON.parse(jwkStr) as jose.JWK;
+
+    keys.push(jwk);
   }
-  
+
   return { keys };
+}
+```
+
+#### `getActivePrivateKeyAndKid()`
+Gets the currently active private key for signing tokens:
+
+```typescript
+export async function getActivePrivateKeyAndKid() {
+  const redis = getRedis();
+
+  const kid = await redis.get(ACTIVE_KID_KEY);
+
+  if (!kid) {
+    const active = await ensureActiveKey();
+    return { key: active.privateKey, kid: active.kid };
+  }
+
+  const pem = await redis.get(KEY_PEM_PREFIX + kid);
+  const key = await jose.importPKCS8(pem!, 'RS256');
+
+  return { key, kid };
+}
+```
+
+#### `getLocalJwkSet()`
+Creates a local JWK set for token validation:
+
+```typescript
+export async function getLocalJwkSet() {
+  const jwks = await getJWKS();
+
+  return jose.createLocalJWKSet(jwks);
 }
 ```
 
@@ -97,10 +166,12 @@ export async function getJWKS() {
 ### Token Creation
 
 ```typescript
-export async function createAccessToken(userId: string, sessionId: string) {
+export async function createAccessToken(options: CreateAccessTokenOptions) {
+  const { userId, sessionId } = options;
+
   const { key, kid } = await getActivePrivateKeyAndKid();
-  
-  return await new jose.SignJWT({
+
+  const accessToken = await new jose.SignJWT({
     sub: userId,
     jti: sessionId
   })
@@ -109,52 +180,39 @@ export async function createAccessToken(userId: string, sessionId: string) {
     .setExpirationTime(Date.now() + envs.app.ACCESS_TOKEN_EXPIRY_MS)
     .setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid })
     .sign(key);
+
+  return { accessToken };
 }
 ```
 
 ### Token Validation
 
 ```typescript
-export async function validateToken(token: string) {
-  const jwks = await getLocalJwkSet();
+export async function validateAccessToken(token: string) {
+  try {
+    const jwkSet = await getLocalJwkSet();
+    const { payload } = await jose.jwtVerify(token, jwkSet, {
+      algorithms: ['RS256'],
+      issuer: envs.app.ISSUER,
+    });
 
-  const { payload } = await jose.jwtVerify(token, jwks);
+    const userId = payload.sub as string;
+    const sessionId = payload.jti as string;
 
-  return payload;
-}
-```
-
-## API Endpoints
-
-### `GET /auth/jwks`
-Returns the JSON Web Key Set for token validation:
-
-```json
-{
-  "keys": [
-    {
-      "kty": "RSA",
-      "kid": "uuid-here",
-      "alg": "RS256",
-      "use": "sig",
-      "n": "...",
-      "e": "..."
+    if (!userId || !sessionId) {
+      return { userId: null, sessionId: null, isValid: false };
     }
-  ]
+
+    return {
+      userId,
+      sessionId,
+      isValid: true
+    };
+  } catch {
+    return { userId: null, sessionId: null, isValid: false };
+  }
 }
 ```
-
-### `POST /auth/request-otp`
-Request a one-time password for authentication.
-
-### `POST /auth/login`
-Authenticate with OTP and receive JWT tokens.
-
-### `POST /auth/refresh`
-Refresh access token using refresh token.
-
-### `POST /auth/logout`
-Invalidate current session.
 
 ## Configuration
 
@@ -162,65 +220,54 @@ Invalidate current session.
 
 ```bash
 # App Configuration
-APP_ENV=dev                    # dev | prod
-PORT=3333                      # Server port
 ISSUER=how-to-jwks            # JWT issuer claim
 JWKS_MAX_KEYS=5               # Number of recent keys to keep
 ACCESS_TOKEN_EXPIRY_MS=900000 # 15 minutes
 REFRESH_TOKEN_EXPIRY_MS=2592000000 # 30 days
 
-# Database
-DATABASE_URL=postgresql://user:pass@localhost:5432/db
-
 # Redis
 REDIS_URL=redis://localhost:6379
 ```
-
-## Getting Started
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/Vicentesan/how-to-jwks.git 
-   cd how-to-jwks
-   ```
-
-2. **Install dependencies**
-   ```bash
-   bun install
-   ```
-
-3. **Set up environment**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-4. **Start services**
-   ```bash
-   # Start Redis and PostgreSQL
-   docker-compose up -d
-   
-   # Run database migrations
-   bun run db:migrate
-   ```
-
-5. **Start development server**
-   ```bash
-   bun run dev
-   ```
-
-6. **View API documentation**
-   ```
-   http://localhost:3333/docs
-   ```
 
 ## Key Rotation
 
 To rotate keys (recommended periodically or after security incidents):
 
 ```typescript
-// Call the rotation endpoint or function
-await rotateKeys();
+export async function rotateKeys() {
+  const redis = getRedis();
+
+  const { privateKey, publicKey } = await jose.generateKeyPair('RS256', { extractable: true });
+
+  const kid = crypto.randomUUID();
+  const pem = await jose.exportPKCS8(privateKey);
+  const jwk = await jose.exportJWK(publicKey);
+
+  jwk.kid = kid;
+  jwk.alg = 'RS256';
+  jwk.use = 'sig';
+
+  await redis.set(KEY_PEM_PREFIX + kid, pem);
+  await redis.set(KEY_JWK_PREFIX + kid, JSON.stringify(jwk));
+  await redis.set(ACTIVE_KID_KEY, kid);
+  await redis.zadd(RECENT_KEYS_ZSET, Date.now(), kid);
+
+  const keep = await getKeepCount();
+  const total = await redis.zcard(RECENT_KEYS_ZSET);
+
+  if (total > keep) {
+    const toRemove = await redis.zrange(RECENT_KEYS_ZSET, 0, total - keep - 1);
+
+    for (const rk of toRemove) {
+      await redis.del(KEY_PEM_PREFIX + rk);
+      await redis.del(KEY_JWK_PREFIX + rk);
+    }
+
+    await redis.zrem(RECENT_KEYS_ZSET, ...toRemove);
+  }
+  
+  return { kid, privateKey };
+}
 ```
 
 This will:
