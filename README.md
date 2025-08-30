@@ -89,8 +89,7 @@ export async function ensureActiveKey() {
       const oldKeys = await redis.zrange(RECENT_KEYS_ZSET, 0, currentKeyCount - maxKeys - 1);
       
       for (const oldKeyId of oldKeys) {
-        await redis.del(KEY_PEM_PREFIX + oldKeyId);
-        await redis.del(KEY_JWK_PREFIX + oldKeyId);
+        await revokeKey(oldKeyId)
       }
       
       await redis.zrem(RECENT_KEYS_ZSET, ...oldKeys);
