@@ -317,4 +317,4 @@ This creates a new key pair, sets it as active, and cleans up old keys.
 -  Middleware to verify JWTs using your JWKS
 -  Admin routes to rotate or revoke keys
 
-Feel free to open issues or send pull requests to improve this. This is just a basic starting point — let’s build on it!
+Feel free to open issues or send pull requests to improve this. This is just a basic starting point. Let’s build on it!
