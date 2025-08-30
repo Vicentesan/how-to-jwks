@@ -196,14 +196,7 @@ export async function revokeKey(kid: string) {
 ### Token Creation
 
 ```typescript
-// Type definitions
-interface CreateAccessTokenOptions {
-  userId: string;
-  sessionId: string;
-}
-
-export async function createAccessToken(options: CreateAccessTokenOptions) {
-  const { userId, sessionId } = options;
+export async function createAccessToken({ userId, sessionId }) {
   const { key, kid } = await getActivePrivateKeyAndKid();
 
   const accessToken = await new jose.SignJWT({
