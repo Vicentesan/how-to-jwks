@@ -34,11 +34,23 @@ The core idea is: **manage all your keys in Redis with clear rules**.
 
 Keys are stored in Redis with this structure:
 
--  `auth:keys:active` — The current key ID for signing
--  `auth:keys:pem:{kid}` — Private key PEM for signing
--  `auth:keys:jwk:{kid}` — Public key in JWK format for validation
--  `auth:keys:recent` — Sorted set of recent key IDs (by timestamp)
--  `auth:keys:revoked` — Set of revoked key IDs
+#### Redis Keys Overview
+
+| Key Pattern | Type | Purpose | Example |
+|-------------|------|---------|---------|
+| `auth:keys:active` | String | Stores the currently active key ID for signing tokens | `"abc123-def456"` |
+| `auth:keys:pem:{kid}` | String | Private key in PEM format for signing JWTs | `"-----BEGIN PRIVATE KEY-----\n..."` |
+| `auth:keys:jwk:{kid}` | String | Public key in JWK format for token validation | `{"kty":"RSA","kid":"abc123-def456",...}` |
+| `auth:keys:recent` | Sorted Set | Recent key IDs ordered by creation timestamp | `[{"score":1703123456789,"member":"abc123-def456"}]` |
+| `auth:keys:revoked` | Set | Key IDs that have been revoked and should not be used | `["old-key-123","compromised-key-456"]` |
+
+#### Key Details
+
+- **`auth:keys:active`** - Single string value containing the key ID that should be used for signing new tokens
+- **`auth:keys:pem:{kid}`** - Private key material in PKCS8 PEM format, used by the signing function
+- **`auth:keys:jwk:{kid}`** - Public key in JSON Web Key format, included in the JWKS endpoint for validation
+- **`auth:keys:recent`** - Sorted set where score is timestamp, used to track key creation order and cleanup old keys
+- **`auth:keys:revoked`** - Set of key IDs that have been explicitly revoked, these keys are excluded from JWKS
 
 ### Core Functions
 
@@ -162,6 +174,19 @@ export async function getLocalJwkSet() {
 }
 ```
 
+#### `revokeKey()`
+Revoke an existent active keypair:
+
+```typescript
+export async function revokeKey(kid: string) {
+  const redis = getRedis();
+
+  await redis.sadd(REVOKED_KEYS_SET, kid);
+  await redis.del(KEY_PEM_PREFIX + kid);
+  await redis.del(KEY_JWK_PREFIX + kid)
+}
+```
+
 ### Authentication Flow
 
 1. **Startup**: Call `ensureActiveKey()` to make sure a key exists.
@@ -262,8 +287,7 @@ export async function rotateKeys() {
     const oldKeys = await redis.zrange(RECENT_KEYS_ZSET, 0, currentKeyCount - maxKeys - 1);
     
     for (const oldKeyId of oldKeys) {
-      await redis.del(KEY_PEM_PREFIX + oldKeyId);
-      await redis.del(KEY_JWK_PREFIX + oldKeyId);
+      await revokeKey(oldKeyId);
     }
     
     await redis.zrem(RECENT_KEYS_ZSET, ...oldKeys);
