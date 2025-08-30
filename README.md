@@ -1,6 +1,8 @@
 # How to JWKS
 
-This repository demonstrates a robust approach to implementing JSON Web Key Set (JWKS) authentication. After wrestling with key rotation, token validation, and session management across multiple projects, I've settled on this pattern that keeps things simple and reliable.
+This repository demonstrates my first attempt at implementing JSON Web Key Set (JWKS) authentication. After learning the basics from [Diego Fernandes (@dieegosf)](https://x.com/dieegosf) and diving deep into key rotation, token validation, and session management, I've created this implementation that keeps things simple and reliable. A huge shoutout to Diego for teaching me the fundamentals of JWKS and inspiring me to create this blog post available at [vicentesan.dev/blog/how-to-jwks](https://vicentesan.dev/blog/how-to-jwks).
+
+This is a living document for the community. Feel free to open issues to discuss improvements, edge cases, or share your experiences. Pull requests are welcome to enhance the implementation, fix bugs, or add new features. Let's learn and improve together!
 
 ## The Problem
 
