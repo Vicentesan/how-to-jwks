@@ -89,7 +89,7 @@ export async function ensureActiveKey() {
       const oldKeys = await redis.zrange(RECENT_KEYS_ZSET, 0, currentKeyCount - maxKeys - 1);
       
       for (const oldKeyId of oldKeys) {
-        await revokeKey(oldKeyId)
+        await revokeKey(oldKeyId);
       }
       
       await redis.zrem(RECENT_KEYS_ZSET, ...oldKeys);
@@ -182,7 +182,7 @@ export async function revokeKey(kid: string) {
 
   await redis.sadd(REVOKED_KEYS_SET, kid);
   await redis.del(KEY_PEM_PREFIX + kid);
-  await redis.del(KEY_JWK_PREFIX + kid)
+  await redis.del(KEY_JWK_PREFIX + kid);
 }
 ```
 
@@ -196,6 +196,12 @@ export async function revokeKey(kid: string) {
 ### Token Creation
 
 ```typescript
+// Type definitions
+interface CreateAccessTokenOptions {
+  userId: string;
+  sessionId: string;
+}
+
 export async function createAccessToken(options: CreateAccessTokenOptions) {
   const { userId, sessionId } = options;
   const { key, kid } = await getActivePrivateKeyAndKid();
